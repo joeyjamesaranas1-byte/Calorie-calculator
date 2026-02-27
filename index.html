@@ -71,16 +71,15 @@
                     <i class="fas fa-times"></i>
                 </button>
             </div>
-            <p class="text-sm text-slate-500 mb-6 leading-relaxed">Enter your <strong>Google Gemini API Key</strong> to enable AI vision analysis.</p>
+            <p class="text-sm text-slate-500 mb-6 leading-relaxed">The API key is handled automatically. You can manually override it here if needed.</p>
             <div class="space-y-4">
                 <div>
                     <label class="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">API Key</label>
-                    <input type="password" id="apiInput" placeholder="AIzaSy..." class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none font-mono text-sm">
+                    <input type="password" id="apiInput" placeholder="Leave empty for default..." class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none font-mono text-sm">
                 </div>
                 <button onclick="saveApiKey()" class="w-full bg-emerald-500 text-white py-4 rounded-xl font-bold shadow-lg shadow-emerald-100 hover:bg-emerald-600 transition-all">
-                    Save Config
+                    Update Config
                 </button>
-                <p class="text-[10px] text-center text-slate-400">Keys are stored locally in your session.</p>
             </div>
         </div>
     </div>
@@ -160,7 +159,7 @@
                         <i class="fas fa-brain absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-emerald-500"></i>
                     </div>
                     <p class="font-bold text-lg mb-2">Analyzing Nutrition...</p>
-                    <p id="analysisStatus" class="text-xs text-slate-300">Consulting Gemini AI</p>
+                    <p id="analysisStatus" class="text-xs text-slate-300">Consulting Gemini 2.5 Flash</p>
                 </div>
             </div>
             <div id="analyzeControls" class="flex gap-4">
@@ -239,27 +238,19 @@
     </nav>
 
     <script>
-        let userApiKey = "";
+        const apiKey = ""; // Managed by environment
+        let userOverrideKey = "";
         let currentStream = null;
         let capturedBase64 = null;
 
         function toggleSettings() {
             const overlay = document.getElementById('settingsOverlay');
             overlay.classList.toggle('active');
-            if (overlay.classList.contains('active')) {
-                document.getElementById('apiInput').value = userApiKey;
-            }
         }
 
         function saveApiKey() {
-            const key = document.getElementById('apiInput').value.trim();
-            if (!key.startsWith("AIza")) {
-                alert("Please enter a valid Google API key (starts with 'AIza').");
-                return;
-            }
-            userApiKey = key;
+            userOverrideKey = document.getElementById('apiInput').value.trim();
             toggleSettings();
-            console.log("API Key Saved.");
         }
 
         function showView(viewId) {
@@ -334,22 +325,17 @@
         }
 
         async function runAnalysis() {
-            if (!userApiKey) {
-                alert("Please enter your Gemini API Key in Settings (gear icon) first.");
-                toggleSettings();
-                return;
-            }
-
+            const currentKey = userOverrideKey || apiKey;
             const loading = document.getElementById('loadingOverlay');
             loading.classList.remove('hidden');
 
             const base64Data = capturedBase64.split(',')[1];
+            const bmi = document.getElementById('bmiScore').textContent;
             
-            // Re-structured prompt to be extremely specific about the JSON format
-            const prompt = `Task: Analyze food in the image.
-            Return ONLY a raw JSON object string. Do not include markdown code blocks.
-            Format:
-            {"foodName": "name", "calories": 250, "macros": {"protein": "10g", "carbs": "30g", "fat": "5g"}, "healthTip": "Tip here"}`;
+            const prompt = `Identify the food in this image and provide estimated nutritional info. 
+            User's BMI is ${bmi}. 
+            Respond ONLY with a valid JSON object in this format: 
+            {"foodName": "...", "calories": number, "macros": {"protein": "Xg", "carbs": "Xg", "fat": "Xg"}, "healthTip": "..."}`;
 
             const payload = {
                 contents: [{
@@ -357,54 +343,53 @@
                         { text: prompt },
                         { inlineData: { mimeType: "image/jpeg", data: base64Data } }
                     ]
-                }]
+                }],
+                generationConfig: {
+                    responseMimeType: "application/json"
+                }
+            };
+
+            const fetchWithRetry = async (url, options, retries = 5, backoff = 1000) => {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    return await response.json();
+                } catch (err) {
+                    if (retries > 0) {
+                        await new Promise(res => setTimeout(res, backoff));
+                        return fetchWithRetry(url, options, retries - 1, backoff * 2);
+                    }
+                    throw err;
+                }
             };
 
             try {
-                // Using v1 stable as primary
-                const endpoint = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${userApiKey}`;
+                const model = "gemini-2.5-flash-preview-09-2025";
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentKey}`;
                 
-                const response = await fetch(endpoint, {
+                const result = await fetchWithRetry(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
 
-                const result = await response.json();
+                const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (!rawText) throw new Error("Empty AI response");
 
-                if (result.error) {
-                    throw new Error(`${result.error.status}: ${result.error.message}`);
-                }
-
-                if (!result.candidates || result.candidates.length === 0) {
-                    throw new Error("AI returned an empty response. Check if your API key has visual capabilities enabled.");
-                }
-
-                const rawText = result.candidates[0].content.parts[0].text;
-                
-                // Enhanced JSON extraction: finds anything between { and }
-                let content;
-                try {
-                    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-                    if (!jsonMatch) throw new Error("Could not find JSON in AI response");
-                    content = JSON.parse(jsonMatch[0]);
-                } catch (parseErr) {
-                    console.log("Raw text was:", rawText);
-                    throw new Error("AI response was not in a readable format. Try again.");
-                }
+                const content = JSON.parse(rawText);
                 
                 document.getElementById('resultImg').src = capturedBase64;
-                document.getElementById('resFoodName').textContent = content.foodName || "Unknown Food";
+                document.getElementById('resFoodName').textContent = content.foodName || "Identified Meal";
                 document.getElementById('resCalories').textContent = content.calories || "0";
                 document.getElementById('resProtein').textContent = content.macros?.protein || "0g";
                 document.getElementById('resCarbs').textContent = content.macros?.carbs || "0g";
                 document.getElementById('resFat').textContent = content.macros?.fat || "0g";
-                document.getElementById('resHealthTip').textContent = content.healthTip || "Nutritious meal choice!";
+                document.getElementById('resHealthTip').textContent = content.healthTip || "Maintain a balanced diet for optimal health.";
 
                 showView('results');
             } catch (err) {
                 console.error("Analysis Error:", err);
-                alert(`Analysis Failed:\n${err.message}\n\nTroubleshooting:\n1. Ensure your Gemini API key is valid.\n2. Ensure you have internet access.\n3. Try a clearer photo.`);
+                alert("Analysis failed. Please check your connection or ensure the image is clear and try again.");
             } finally {
                 loading.classList.add('hidden');
             }
