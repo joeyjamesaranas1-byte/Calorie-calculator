@@ -240,7 +240,6 @@
 
     <script>
         let userApiKey = "";
-        const GEMINI_MODEL = "gemini-1.5-flash"; 
         let currentStream = null;
         let capturedBase64 = null;
 
@@ -346,7 +345,7 @@
 
             const base64Data = capturedBase64.split(',')[1];
             
-            const prompt = `Act as a nutritionist. Identify the food in this image. 
+            const prompt = `Identify the food in this image. 
             Return ONLY a valid JSON object with these keys: 
             "foodName", "calories" (number), "macros" (object with protein, carbs, fat as strings like "10g"), "healthTip" (one sentence).`;
 
@@ -364,8 +363,8 @@
             };
 
             try {
-                // Using v1beta for better stability with JSON generation config
-                const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${userApiKey}`;
+                // Switching to stable v1 and the "gemini-1.5-flash" path
+                const endpoint = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${userApiKey}`;
                 
                 const response = await fetch(endpoint, {
                     method: 'POST',
@@ -384,8 +383,6 @@
                 }
 
                 let rawText = result.candidates[0].content.parts[0].text;
-                
-                // Cleanup potentially malformed JSON if model didn't strictly follow mimeType
                 rawText = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
                 
                 const content = JSON.parse(rawText);
@@ -400,8 +397,8 @@
 
                 showView('results');
             } catch (err) {
-                console.error("Full Error Object:", err);
-                alert(`Analysis Failed:\n${err.message}\n\nTroubleshooting:\n1. Check your internet.\n2. Verify API Key is correct.\n3. Ensure Gemini API is enabled in Google AI Studio.`);
+                console.error("Analysis Error:", err);
+                alert(`Analysis Failed:\n${err.message}\n\nTroubleshooting:\n1. Ensure Gemini API is enabled for this key.\n2. Verify the key is correct.`);
             } finally {
                 loading.classList.add('hidden');
             }
