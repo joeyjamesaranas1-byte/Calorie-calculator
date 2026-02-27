@@ -345,9 +345,11 @@
 
             const base64Data = capturedBase64.split(',')[1];
             
-            const prompt = `Identify the food in this image. 
-            Return ONLY a valid JSON object with these keys: 
-            "foodName", "calories" (number), "macros" (object with protein, carbs, fat as strings like "10g"), "healthTip" (one sentence).`;
+            // Re-structured prompt to be extremely specific about the JSON format
+            const prompt = `Task: Analyze food in the image.
+            Return ONLY a raw JSON object string. Do not include markdown code blocks.
+            Format:
+            {"foodName": "name", "calories": 250, "macros": {"protein": "10g", "carbs": "30g", "fat": "5g"}, "healthTip": "Tip here"}`;
 
             const payload = {
                 contents: [{
@@ -355,15 +357,11 @@
                         { text: prompt },
                         { inlineData: { mimeType: "image/jpeg", data: base64Data } }
                     ]
-                }],
-                generationConfig: { 
-                    responseMimeType: "application/json",
-                    temperature: 0.1
-                }
+                }]
             };
 
             try {
-                // Switching to stable v1 and the "gemini-1.5-flash" path
+                // Using v1 stable as primary
                 const endpoint = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${userApiKey}`;
                 
                 const response = await fetch(endpoint, {
@@ -379,13 +377,21 @@
                 }
 
                 if (!result.candidates || result.candidates.length === 0) {
-                    throw new Error("No response from AI. Try a clearer image.");
+                    throw new Error("AI returned an empty response. Check if your API key has visual capabilities enabled.");
                 }
 
-                let rawText = result.candidates[0].content.parts[0].text;
-                rawText = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
+                const rawText = result.candidates[0].content.parts[0].text;
                 
-                const content = JSON.parse(rawText);
+                // Enhanced JSON extraction: finds anything between { and }
+                let content;
+                try {
+                    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+                    if (!jsonMatch) throw new Error("Could not find JSON in AI response");
+                    content = JSON.parse(jsonMatch[0]);
+                } catch (parseErr) {
+                    console.log("Raw text was:", rawText);
+                    throw new Error("AI response was not in a readable format. Try again.");
+                }
                 
                 document.getElementById('resultImg').src = capturedBase64;
                 document.getElementById('resFoodName').textContent = content.foodName || "Unknown Food";
@@ -398,7 +404,7 @@
                 showView('results');
             } catch (err) {
                 console.error("Analysis Error:", err);
-                alert(`Analysis Failed:\n${err.message}\n\nTroubleshooting:\n1. Ensure Gemini API is enabled for this key.\n2. Verify the key is correct.`);
+                alert(`Analysis Failed:\n${err.message}\n\nTroubleshooting:\n1. Ensure your Gemini API key is valid.\n2. Ensure you have internet access.\n3. Try a clearer photo.`);
             } finally {
                 loading.classList.add('hidden');
             }
